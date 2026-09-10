@@ -1,12 +1,12 @@
 {
   "nodes": {
-    "logos-lidl": {
+    "lidl-with-shared-c-abi": {
       "inputs": {
         "logos-nix": [
           "logos-nix"
         ],
         "nixpkgs": [
-          "logos-lidl",
+          "lidl-with-shared-c-abi",
           "logos-nix",
           "nixpkgs"
         ]
@@ -14,13 +14,13 @@
       "locked": {
         "lastModified": 1782951132,
         "narHash": "sha256-56pyrYFoxzKOlsr+ql9jHuOOKZGJmmSkzcYx5s7tKJA=",
-        "owner": "logos-co",
+        "owner": "logos-fleet",
         "repo": "logos-lidl",
         "rev": "386575a94f1c4f1af595d1e3550548f769799274",
         "type": "github"
       },
       "original": {
-        "owner": "logos-co",
+        "owner": "logos-fleet",
         "ref": "feat/shared-c-abi-lib",
         "repo": "logos-lidl",
         "type": "github"
@@ -57,16 +57,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1782949836,
-        "narHash": "sha256-oYKL42Pumh8BNvgFYgVwvn36qFfWzYDtgl8Hvu4VkIE=",
-        "owner": "logos-co",
+        "lastModified": 1789025335,
+        "narHash": "sha256-nTWaxuGVfZPVp28Wtjc06z/Ix0xdDMuPQ0BhuQSVtb4=",
+        "owner": "logos-fleet",
         "repo": "logos-protocol",
-        "rev": "dbc9b83d220668e0e2cde496c9c945d93c350ac7",
+        "rev": "b65429e7a295268f148e55d6538162f811f33001",
         "type": "github"
       },
       "original": {
-        "owner": "logos-co",
-        "ref": "feat/protocol-shared-lib",
+        "owner": "logos-fleet",
         "repo": "logos-protocol",
         "type": "github"
       }
@@ -103,15 +102,42 @@
         "type": "github"
       }
     },
+    "protocol-with-serving-provider": {
+      "inputs": {
+        "logos-nix": [
+          "logos-nix"
+        ],
+        "nixpkgs": [
+          "protocol-with-serving-provider",
+          "logos-nix",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1782949836,
+        "narHash": "sha256-oYKL42Pumh8BNvgFYgVwvn36qFfWzYDtgl8Hvu4VkIE=",
+        "owner": "logos-co",
+        "repo": "logos-protocol",
+        "rev": "dbc9b83d220668e0e2cde496c9c945d93c350ac7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-co",
+        "ref": "feat/protocol-shared-lib",
+        "repo": "logos-protocol",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "logos-lidl": "logos-lidl",
+        "lidl-with-shared-c-abi": "lidl-with-shared-c-abi",
         "logos-nix": "logos-nix",
         "logos-protocol": "logos-protocol",
         "nixpkgs": [
           "logos-nix",
           "nixpkgs"
-        ]
+        ],
+        "protocol-with-serving-provider": "protocol-with-serving-provider"
       }
     }
   },
