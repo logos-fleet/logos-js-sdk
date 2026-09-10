@@ -119,8 +119,9 @@ class WebClient {
    * @param {Object} [opts.peer]       an EXISTING WebPeer to call over, instead
    *   of a channel of our own - see below. Exactly one of channel/peer.
    * @param {number} [opts.timeoutMs]  default call timeout (30s)
-   * @param {Function} [opts.onError]  malformed inbound message / handler throw
-   * @param {Function} [opts.onClosed] the channel went away
+   * @param {Function} [opts.onError]  malformed inbound message / handler throw.
+   *   Only for a peer of our own: a BORROWED peer already has its owner's.
+   * @param {Function} [opts.onClosed] the channel went away. Same caveat.
    */
   constructor(originModule, opts = {}) {
     if (!originModule) throw new Error('WebClient: originModule is required');

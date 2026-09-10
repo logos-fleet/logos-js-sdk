@@ -100,9 +100,12 @@ provider.register({
 const peer  = provider.attach(channel);           // attach() hands back the peer
 const logos = new WebClient('my_module', { peer });
 
-// ask capability_module for access, then call what it granted
+// ask capability_module for access, then call what it granted. requestModule
+// takes the ORIGIN and the target: on this wire a module's identity is the
+// channel it speaks on, but capability_module's signature predates that and
+// still asks who is calling.
 const token = await logos.module('capability_module')
-                        .call('requestModule', 'other_module');
+                        .call('requestModule', 'my_module', 'other_module');
 const other = logos.module('other_module');
 other.saveToken(token);
 await other.call('doSomething');

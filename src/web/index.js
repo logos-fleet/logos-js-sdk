@@ -28,7 +28,7 @@
 //   const peer  = provider.attach(await window.logosChannelReady);
 //   const logos = new WebClient('my_module', { peer });
 //   const token = await logos.module('capability_module')
-//                           .call('requestModule', 'other_module');
+//                           .call('requestModule', 'my_module', 'other_module');
 //
 // The wire is logos-protocol's WEB transport (cpp/implementations/web): the
 // plain transport's message set as JSON over a channel, with no byte framing.
