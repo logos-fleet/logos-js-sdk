@@ -25,18 +25,21 @@
     # (LOGOS_E2E_PROVIDER_LIB) for exactly this reason, so a failure is
     # attributable to a half rather than to "the protocol".
     #
-    # It is NOT named `logos-protocol-something` by accident: the workspace
-    # retargets an input by NAME, and the whole point of this one is to stay on
-    # its own branch until the provider ABI lands. Delete it then; nothing else
-    # in this flake changes.
+    # The workspace (logos-workspace's `ws sync-graph`) derives follows from the
+    # repo an input LOCKS, not from its name, so this would be retargeted to the
+    # workspace's logos-protocol like any other input; scripts/ws carves it out
+    # by name (follows_exempt_input). It is named off `logos-*` so it reads as
+    # the deliberate second pin it is. Delete it when the provider ABI lands on
+    # master; nothing else in this flake changes.
     protocol-with-serving-provider.url = "github:logos-co/logos-protocol/feat/protocol-shared-lib";
     protocol-with-serving-provider.inputs.logos-nix.follows = "logos-nix";
 
     # ── the LIDL frontend ───────────────────────────────────────────────────
     # The shared liblogos_lidl_c exposes lidl_parse_to_json, so codegen reuses
     # the one true grammar instead of reimplementing it in JS. Pinned to the
-    # branch that adds the shared-lib target, and named off `logos-lidl` for the
-    # same reason as above — re-pin and rename after that branch merges.
+    # branch that adds the shared-lib target, and named off `logos-lidl` so it
+    # reads as a branch pin (logos-lidl is not a workspace input today, so
+    # nothing retargets it) — re-pin and rename after that branch merges.
     lidl-with-shared-c-abi.url = "github:logos-fleet/logos-lidl/feat/shared-c-abi-lib";
     lidl-with-shared-c-abi.inputs.logos-nix.follows = "logos-nix";
   };
@@ -44,11 +47,6 @@
   outputs = { self, nixpkgs, logos-nix, logos-protocol, protocol-with-serving-provider, lidl-with-shared-c-abi }:
     let
       systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f {
-        inherit system;
-        pkgs = import nixpkgs { inherit system; };
-      });
-      ext = system: if nixpkgs.lib.hasSuffix "darwin" system then "dylib" else "so";
 
       # The shared liblogos_protocol lives in a different attribute depending on
       # which logos-protocol this is pinned to:
@@ -60,34 +58,40 @@
       sharedOf = flake: system:
         let p = flake.packages.${system};
         in p.logos-protocol-shared or p.logos-protocol;
-    in
-    {
-      packages = forAllSystems ({ system, pkgs }: {
-        # The browser build. `nix build .#web-bundle` → dist/logos-web.{mjs,js}
-        web-bundle = import ./nix/web-bundle.nix { inherit pkgs; src = ./.; };
-        default = import ./nix/web-bundle.nix { inherit pkgs; src = ./.; };
 
-        # The C++ provider on the web transport, bridged to stdio. Useful on its
-        # own: point any browser-side experiment at it.
-        web-shim = import ./nix/web-shim.nix {
+      # Everything an output needs for one system, built ONCE here so that
+      # `nix build .#web-shim`, the checks and the dev shell all mean the same
+      # derivation and cannot drift apart.
+      perSystem = system: rec {
+        inherit system;
+        pkgs = import nixpkgs { inherit system; };
+        ext = if nixpkgs.lib.hasSuffix "darwin" system then "dylib" else "so";
+
+        # The two native libraries the Node build loads over koffi.
+        providerProtocolLib = "${sharedOf protocol-with-serving-provider system}/lib/liblogos_protocol.${ext}";
+        lidlLib = "${lidl-with-shared-c-abi.packages.${system}.logos-lidl}/lib/liblogos_lidl_c.${ext}";
+
+        # The browser build: dist/logos-web.{mjs,js}.
+        webBundle = import ./nix/web-bundle.nix { inherit pkgs; src = ./.; };
+        # The C++ provider on the web transport, bridged to stdio.
+        webShim = import ./nix/web-shim.nix {
           inherit pkgs;
           src = ./test/web-shim;
           logosProtocol = logos-protocol.packages.${system}.logos-protocol;
         };
+      };
+      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f (perSystem system));
+    in
+    {
+      packages = forAllSystems ({ webBundle, webShim, ... }: {
+        # `nix build .#web-bundle` → dist/logos-web.{mjs,js}
+        web-bundle = webBundle;
+        default = webBundle;
+        # Useful on its own: point any browser-side experiment at it.
+        web-shim = webShim;
       });
 
-      checks = forAllSystems ({ system, pkgs }:
-        let
-          e = ext system;
-          webBundle = import ./nix/web-bundle.nix { inherit pkgs; src = ./.; };
-          webShim = import ./nix/web-shim.nix {
-            inherit pkgs;
-            src = ./test/web-shim;
-            logosProtocol = logos-protocol.packages.${system}.logos-protocol;
-          };
-          lidlShared = lidl-with-shared-c-abi.packages.${system}.logos-lidl;
-          providerProtocol = sharedOf protocol-with-serving-provider system;
-        in
+      checks = forAllSystems ({ pkgs, providerProtocolLib, lidlLib, webBundle, webShim, ... }:
         {
           # ── the Node build ────────────────────────────────────────────────
           # A Node provider (child process) and consumer exchange calls + events
@@ -107,8 +111,8 @@
             checkPhase = ''
               runHook preCheck
               export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-              export LOGOS_PROTOCOL_LIB=${providerProtocol}/lib/liblogos_protocol.${e}
-              export LOGOS_LIDL_LIB=${lidlShared}/lib/liblogos_lidl_c.${e}
+              export LOGOS_PROTOCOL_LIB=${providerProtocolLib}
+              export LOGOS_LIDL_LIB=${lidlLib}
               node test/e2e.js
               runHook postCheck
             '';
@@ -148,7 +152,7 @@
               export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               export LOGOS_WEB_BUNDLE_DIR=${webBundle}/dist
               export LOGOS_WEB_SHIM=${webShim}/bin/logos-web-shim
-              export LOGOS_LIDL_LIB=${lidlShared}/lib/liblogos_lidl_c.${e}
+              export LOGOS_LIDL_LIB=${lidlLib}
               node test/web-bundle-e2e.js
               runHook postCheck
             '';
@@ -157,23 +161,13 @@
         }
       );
 
-      devShells = forAllSystems ({ system, pkgs }:
-        let
-          e = ext system;
-          lidlShared = lidl-with-shared-c-abi.packages.${system}.logos-lidl;
-          providerProtocol = sharedOf protocol-with-serving-provider system;
-          webShim = import ./nix/web-shim.nix {
-            inherit pkgs;
-            src = ./test/web-shim;
-            logosProtocol = logos-protocol.packages.${system}.logos-protocol;
-          };
-        in
+      devShells = forAllSystems ({ pkgs, providerProtocolLib, lidlLib, webShim, ... }:
         {
           default = pkgs.mkShell {
             nativeBuildInputs = [ pkgs.nodejs pkgs.esbuild ];
             shellHook = ''
-              export LOGOS_PROTOCOL_LIB="${providerProtocol}/lib/liblogos_protocol.${e}"
-              export LOGOS_LIDL_LIB="${lidlShared}/lib/liblogos_lidl_c.${e}"
+              export LOGOS_PROTOCOL_LIB="${providerProtocolLib}"
+              export LOGOS_LIDL_LIB="${lidlLib}"
               export LOGOS_WEB_SHIM="${webShim}/bin/logos-web-shim"
               echo "logos-js-sdk dev shell — node $(node --version)"
               echo "  LOGOS_PROTOCOL_LIB=$LOGOS_PROTOCOL_LIB"

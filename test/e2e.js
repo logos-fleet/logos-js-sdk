@@ -2,22 +2,11 @@
 // End-to-end test of the protocol-native SDK: a Node PROVIDER (child process)
 // and a Node CONSUMER (this process) exchange calls + events over plain TCP,
 // with no liblogos_core and no Qt event loop anywhere.
-const { spawn } = require('child_process');
 const path = require('path');
 const { LogosClient, tcp, protocolVersion } = require('..');
+const { assert, spawnReady } = require('./helpers.js');
 
 const PORT = Number(process.env.LOGOS_E2E_PORT || (6100 + (process.pid % 800)));
-
-function assert(cond, msg) { if (!cond) throw new Error('ASSERT FAILED: ' + msg); }
-
-async function waitReady(child) {
-  return new Promise((resolve, reject) => {
-    const to = setTimeout(() => reject(new Error('provider did not become READY in 10s')), 10000);
-    let buf = '';
-    child.stdout.on('data', (d) => { buf += d.toString(); if (buf.includes('READY')) { clearTimeout(to); resolve(); } });
-    child.on('exit', (code) => { clearTimeout(to); reject(new Error('provider exited early with code ' + code)); });
-  });
-}
 
 async function main() {
   console.log('logos-protocol', protocolVersion());
@@ -37,15 +26,16 @@ async function main() {
   const providerLib = process.env.LOGOS_E2E_PROVIDER_LIB;
   if (providerLib) console.log('provider child protocol lib:', providerLib);
 
-  const prov = spawn(process.execPath, [path.join(__dirname, 'provider-fixture.js')], {
+  const { child: prov, ready } = spawnReady(process.execPath, [path.join(__dirname, 'provider-fixture.js')], {
     env: {
       ...process.env,
       LOGOS_E2E_PORT: String(PORT),
       ...(providerLib ? { LOGOS_PROTOCOL_LIB: providerLib } : {}),
     },
     stdio: ['ignore', 'pipe', 'inherit'],
+    stream: 'stdout', timeoutMs: 10000, what: 'the provider',
   });
-  await waitReady(prov);
+  await ready;
 
   const logos = new LogosClient('e2e_app', { transport: tcp('127.0.0.1', PORT) });
   logos.saveToken('calc_js', 'e2e-tok'); // pre-seed so no capability handshake

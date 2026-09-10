@@ -71,16 +71,16 @@ function newlineStreamChannel({ input, output }) {
   input.setEncoding('utf8');
   input.on('data', (chunk) => {
     buffered += chunk;
-    for (;;) {
-      const nl = buffered.indexOf('\n');
-      if (nl < 0) break;
-      const line = buffered.slice(0, nl);
-      buffered = buffered.slice(nl + 1);
+    let start = 0;
+    for (let nl = buffered.indexOf('\n'); nl >= 0; nl = buffered.indexOf('\n', start)) {
+      const line = buffered.slice(start, nl);
+      start = nl + 1;
       if (!line) continue;
-      if (!open) return;
+      if (!open) break;
       if (receiver) receiver(line);
       else queue.push(line);
     }
+    buffered = buffered.slice(start);
   });
   input.on('end', () => { open = false; });
 

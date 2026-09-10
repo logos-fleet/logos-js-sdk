@@ -49,13 +49,14 @@ function main(argv) {
     process.exit(2);
   }
 
+  let generate, kind;
+  if (provider) { generate = generateProvider; kind = 'provider'; }
+  else if (target === 'browser') { generate = generateWebClient; kind = 'browser client'; }
+  else { generate = generateClient; kind = 'node client'; }
+
   const mod = parseFile(input);
-  const code = provider
-    ? generateProvider(mod, { sdkImport: importName })
-    : (target === 'browser'
-        ? generateWebClient(mod, { sdkImport: importName })
-        : generateClient(mod, { sdkImport: importName }));
-  if (out) { fs.writeFileSync(out, code); console.error(`wrote ${out} (${provider ? 'provider' : target + ' client'} for ${mod.name})`); }
+  const code = generate(mod, { sdkImport: importName });
+  if (out) { fs.writeFileSync(out, code); console.error(`wrote ${out} (${kind} for ${mod.name})`); }
   else process.stdout.write(code);
 }
 

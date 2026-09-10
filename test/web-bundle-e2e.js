@@ -20,29 +20,17 @@
 //   LOGOS_WEB_BUNDLE_DIR  dist directory holding logos-web.js + logos-web.mjs
 //   LOGOS_WEB_SHIM        path to the logos-web-shim executable
 //   LOGOS_LIDL_LIB        shared liblogos_lidl_c (for the codegen leg)
-const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { newlineStreamChannel } = require('../src/web/node-channel.js');
+const { assert, waitFor, spawnReady } = require('./helpers.js');
 
 const BUNDLE_DIR = process.env.LOGOS_WEB_BUNDLE_DIR || path.join(__dirname, '..', 'dist');
 const SHIM = process.env.LOGOS_WEB_SHIM;
 const MODULE_NAME = 'calc_cpp';
 const TOKEN = 'web-shim-tok';
-
-function assert(cond, msg) { if (!cond) throw new Error('ASSERT FAILED: ' + msg); }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function waitFor(pred, budgetMs, what) {
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    if (pred()) return true;
-    await sleep(10);
-  }
-  throw new Error(`timed out after ${budgetMs}ms waiting for ${what}`);
-}
 
 // -- (a) the bundle, in a context that is deliberately NOT Node --------------
 function loadBundle() {
@@ -66,23 +54,13 @@ function loadBundle() {
   return sdk;
 }
 
+// The shim's stdout is the wire, so READY (and every diagnostic) is on stderr.
 function startShim() {
   assert(SHIM && fs.existsSync(SHIM), `LOGOS_WEB_SHIM points at the shim binary (got ${SHIM})`);
-  const child = spawn(SHIM, ['--module', MODULE_NAME, '--token', TOKEN, '--tick-ms', '100'], {
+  return spawnReady(SHIM, ['--module', MODULE_NAME, '--token', TOKEN, '--tick-ms', '100'], {
     stdio: ['pipe', 'pipe', 'pipe'],
+    stream: 'stderr', timeoutMs: 20000, what: 'the shim', echo: '[shim] ',
   });
-  const ready = new Promise((resolve, reject) => {
-    const to = setTimeout(() => reject(new Error('the shim did not print READY in 20s')), 20000);
-    let buf = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => {
-      buf += d;
-      process.stderr.write(`[shim] ${d}`);
-      if (buf.includes('READY')) { clearTimeout(to); resolve(); }
-    });
-    child.on('exit', (code) => { clearTimeout(to); reject(new Error(`the shim exited early (${code})`)); });
-  });
-  return { child, ready };
 }
 
 async function main() {

@@ -46,15 +46,12 @@ class WebPeer {
     this._subs = new Map();            // key -> {object, event, handles:[{id, callback}]}
     this._subKeys = new Map();         // subscription id -> key
     this._stopped = false;
-    this._started = false;
   }
 
   isOpen() { return !this._stopped && this.channel.isOpen(); }
 
   start() {
-    if (this._started || this._stopped) return this;
-    this._started = true;
-    this.channel.setReceiver((text) => this._receive(text));
+    if (!this._stopped) this.channel.setReceiver((text) => this._receive(text));
     return this;
   }
 
@@ -64,22 +61,36 @@ class WebPeer {
 
   /** Send a Call and resolve with its ResultMessage (ok or not - see consumer.js). */
   sendCall(msg, timeoutMs = DEFAULT_TIMEOUT_MS) {
-    const id = msg.id || this.nextId();
+    return this._request(MessageType.Call, this._pending, msg,
+      `call ${msg.object}.${msg.method}`, timeoutMs);
+  }
+
+  /** Send a Methods query and resolve with its MethodsResultMessage. */
+  sendMethods(msg, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    return this._request(MessageType.Methods, this._pendingMethods, msg,
+      `methods query for ${msg.object}`, timeoutMs);
+  }
+
+  // A request/response exchange: register the waiter in `pending` under a
+  // fresh id, put the message on the wire, and settle when the reply lands
+  // (_dispatch), the deadline passes, or the send itself fails.
+  _request(type, pending, msg, what, timeoutMs) {
+    const id = this.nextId();
     return new Promise((resolve, reject) => {
       if (!this.isOpen()) { reject(new CallError('channel is closed', 'TRANSPORT_ERROR')); return; }
       const timer = setTimeout(() => {
-        this._pending.delete(id);
-        reject(new CallError(`call ${msg.object}.${msg.method} timed out after ${timeoutMs}ms`, 'TIMEOUT'));
+        pending.delete(id);
+        reject(new CallError(`${what} timed out after ${timeoutMs}ms`, 'TIMEOUT'));
       }, timeoutMs);
       // Unref where the host allows it: a pending call must not be the reason a
       // Node process stays alive after its caller gave up.
       if (timer && typeof timer.unref === 'function') timer.unref();
-      this._pending.set(id, { resolve, reject, timer });
+      pending.set(id, { resolve, reject, timer });
       try {
-        this._emit({ ...msg, type: MessageType.Call, id });
+        this._emit({ ...msg, type, id });
       } catch (e) {
         clearTimeout(timer);
-        this._pending.delete(id);
+        pending.delete(id);
         reject(e);
       }
     });
@@ -124,27 +135,6 @@ class WebPeer {
       throw new CallError(`call ${msg.object}.${msg.method} timed out after ${timeoutMs}ms`, 'TIMEOUT');
     if (answer.err) throw answer.err;
     return answer.res;
-  }
-
-  /** Send a Methods query and resolve with its MethodsResultMessage. */
-  sendMethods(msg, timeoutMs = DEFAULT_TIMEOUT_MS) {
-    const id = msg.id || this.nextId();
-    return new Promise((resolve, reject) => {
-      if (!this.isOpen()) { reject(new CallError('channel is closed', 'TRANSPORT_ERROR')); return; }
-      const timer = setTimeout(() => {
-        this._pendingMethods.delete(id);
-        reject(new CallError(`methods query for ${msg.object} timed out after ${timeoutMs}ms`, 'TIMEOUT'));
-      }, timeoutMs);
-      if (timer && typeof timer.unref === 'function') timer.unref();
-      this._pendingMethods.set(id, { resolve, reject, timer });
-      try {
-        this._emit({ ...msg, type: MessageType.Methods, id });
-      } catch (e) {
-        clearTimeout(timer);
-        this._pendingMethods.delete(id);
-        reject(e);
-      }
-    });
   }
 
   /**
@@ -195,16 +185,13 @@ class WebPeer {
   stop(reason = 'stopped') {
     if (this._stopped) return;
     this._stopped = true;
-    for (const [, p] of this._pending) {
-      if (p.timer) clearTimeout(p.timer);
-      p.reject(new CallError(`channel closed: ${reason}`, 'TRANSPORT_ERROR'));
+    for (const pending of [this._pending, this._pendingMethods]) {
+      for (const p of pending.values()) {
+        if (p.timer) clearTimeout(p.timer);
+        p.reject(new CallError(`channel closed: ${reason}`, 'TRANSPORT_ERROR'));
+      }
+      pending.clear();
     }
-    this._pending.clear();
-    for (const [, p] of this._pendingMethods) {
-      if (p.timer) clearTimeout(p.timer);
-      p.reject(new CallError(`channel closed: ${reason}`, 'TRANSPORT_ERROR'));
-    }
-    this._pendingMethods.clear();
     this._subs.clear();
     this._subKeys.clear();
     try { this.channel.setReceiver(null); } catch { /* already detached */ }
@@ -240,18 +227,12 @@ class WebPeer {
   _dispatch(msg) {
     const h = this.handler;
     switch (msg.type) {
-      case MessageType.Result: {
-        const p = this._pending.get(msg.id);
-        if (!p) return;                        // a reply to a call we gave up on
-        this._pending.delete(msg.id);
-        if (p.timer) clearTimeout(p.timer);
-        p.resolve(msg);
-        return;
-      }
+      case MessageType.Result:
       case MessageType.MethodsResult: {
-        const p = this._pendingMethods.get(msg.id);
-        if (!p) return;
-        this._pendingMethods.delete(msg.id);
+        const pending = msg.type === MessageType.Result ? this._pending : this._pendingMethods;
+        const p = pending.get(msg.id);
+        if (!p) return;                        // a reply to a call we gave up on
+        pending.delete(msg.id);
         if (p.timer) clearTimeout(p.timer);
         p.resolve(msg);
         return;

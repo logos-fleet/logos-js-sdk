@@ -4,28 +4,34 @@
 #   dist/logos-web.js   an IIFE exposing a `LogosWeb` global, for a <script> tag
 #                       and for the Wasm host's glue, which has no loader
 #
-# esbuild with --platform=browser is also the GATE on the browser build staying
-# browser code: src/web/node-channel.js is the only file under src/web that
-# touches a Node builtin, nothing in the entry reaches it, and if that ever
-# changes this derivation fails to resolve `node:...` rather than shipping a
-# bundle that throws in a page.
+# The esbuild invocation is package.json's `build:web`, run here rather than
+# copied, so the bundle a developer hand-tests and the one the checks validate
+# are built by the same command. Its --platform=browser is also the GATE on the
+# browser build staying browser code: src/web/node-channel.js is the only file
+# under src/web that touches a Node builtin, nothing in the entry reaches it,
+# and if that ever changes this derivation fails to resolve `node:...` rather
+# than shipping a bundle that throws in a page.
+#
+# `src` is the whole package; only src/web and package.json are read, so the
+# bundle is rebuilt only when they change.
 { pkgs, src, version ? "2.0.0" }:
 
 pkgs.stdenv.mkDerivation {
   pname = "logos-js-sdk-web-bundle";
-  inherit version src;
+  inherit version;
+  src = pkgs.lib.fileset.toSource {
+    root = src;
+    fileset = pkgs.lib.fileset.unions [ (src + "/src/web") (src + "/package.json") ];
+  };
 
-  nativeBuildInputs = [ pkgs.esbuild ];
+  nativeBuildInputs = [ pkgs.nodejs pkgs.esbuild ];
 
   dontConfigure = true;
 
   buildPhase = ''
     runHook preBuild
-    mkdir -p dist
-    esbuild src/web/index.mjs --bundle --platform=browser --target=es2020 \
-      --format=esm --outfile=dist/logos-web.mjs
-    esbuild src/web/index.js --bundle --platform=browser --target=es2020 \
-      --format=iife --global-name=LogosWeb --outfile=dist/logos-web.js
+    export HOME=$TMPDIR   # npm wants somewhere to put its cache and logs
+    npm run build:web
     runHook postBuild
   '';
 

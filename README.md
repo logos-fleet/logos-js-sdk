@@ -258,6 +258,9 @@ protocol inputs: `logos-protocol` (the web transport, what this SDK's browser
 half is written against) and `protocol-with-serving-provider` (the branch where
 `lp_provider_*` actually serves, needed only by the Node e2e's provider child).
 They collapse into one input the day the provider ABI lands on master; the same
-goes for `lidl-with-shared-c-abi`. Each is named off `logos-*` deliberately: the
-workspace retargets an input by NAME, and the whole point of those two is to
-stay on their own branch.
+goes for `lidl-with-shared-c-abi`. Each is named off `logos-*` so it reads as
+the deliberate branch pin it is. The name alone does not protect it: the
+workspace derives its overrides from the repo an input locks, so
+`protocol-with-serving-provider` is exempted by name in the workspace's
+`scripts/ws` (`follows_exempt_input`), and `lidl-with-shared-c-abi` is left
+alone only because logos-lidl is not a workspace input.

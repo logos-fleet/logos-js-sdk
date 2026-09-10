@@ -74,6 +74,9 @@ function exceedsCap(text) {
 // JSON has no bytes primitive, so bytes round-trip through a tagged object.
 // Unpadded base64url with the RFC 4648 §5 alphabet — logos::b64UrlEncode.
 const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+// Reverse lookup by char code; -1 marks a character outside the alphabet.
+const B64URL_VALUE = new Int8Array(128).fill(-1);
+for (let i = 0; i < B64URL.length; i++) B64URL_VALUE[B64URL.charCodeAt(i)] = i;
 
 function b64UrlEncode(bytes) {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -92,22 +95,32 @@ function b64UrlEncode(bytes) {
   return out;
 }
 
-// Mirrors logos::b64UrlDecodeChecked: trailing '=' tolerated (we never emit
-// it), a length ≡ 1 (mod 4) body rejected, any character outside the alphabet
-// rejected. Returns null instead of throwing so callers can decide.
-function b64UrlDecodeChecked(text) {
+// The rules of logos::b64UrlDecodeChecked: trailing '=' tolerated (we never
+// emit it), a length ≡ 1 (mod 4) body rejected, any character outside the
+// alphabet rejected. Both functions below apply them; the second one also
+// decodes. Each returns null instead of throwing so callers can decide.
+function b64UrlBody(text) {
   if (typeof text !== 'string') return null;
   let end = text.length;
   while (end > 0 && text[end - 1] === '=') end--;
-  const body = text.slice(0, end);
-  if (body.length % 4 === 1) return null;
+  if (end % 4 === 1) return null;
+  for (let i = 0; i < end; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 128 || B64URL_VALUE[c] < 0) return null;
+  }
+  return text.slice(0, end);
+}
 
+/** True when `text` is well-formed base64url. No allocation beyond the scan. */
+function b64UrlValid(text) { return b64UrlBody(text) !== null; }
+
+function b64UrlDecodeChecked(text) {
+  const body = b64UrlBody(text);
+  if (body === null) return null;
   const out = new Uint8Array((body.length * 3) >> 2);
   let buf = 0, bits = 0, n = 0;
   for (let i = 0; i < body.length; i++) {
-    const v = B64URL.indexOf(body[i]);
-    if (v < 0) return null;
-    buf = (buf << 6) | v;
+    buf = (buf << 6) | B64URL_VALUE[body.charCodeAt(i)];
     bits += 6;
     if (bits >= 8) { bits -= 8; out[n++] = (buf >> bits) & 0xff; }
   }
@@ -137,8 +150,7 @@ function validateValue(v) {
   if (v === null || typeof v !== 'object') return v;
   if (Array.isArray(v)) { for (const e of v) validateValue(e); return v; }
   if (isTaggedBytes(v)) {
-    if (b64UrlDecodeChecked(v._bytes) === null)
-      throw new CodecError('invalid base64url input');
+    if (!b64UrlValid(v._bytes)) throw new CodecError('invalid base64url input');
     return v;
   }
   for (const k of Object.keys(v)) validateValue(v[k]);
@@ -174,40 +186,30 @@ function payloadOf(msg) {
       return { id: msg.id, authToken: msg.authToken || '', object: msg.object };
     case MessageType.MethodsResult:
       return msg.ok
-        ? { id: msg.id, ok: true, methods: (msg.methods || []).map(methodToJson) }
+        ? { id: msg.id, ok: true, methods: (msg.methods || []).map(normalizeMethod) }
         : { id: msg.id, ok: false, err: msg.err || '' };
     default:
       throw new CodecError(`unknown message type ${msg.type}`);
   }
 }
 
-function methodToJson(m) {
-  return {
-    name: str(m.name),
-    signature: str(m.signature),
-    returnType: str(m.returnType),
-    isInvokable: m.isInvokable === undefined ? true : !!m.isInvokable,
-    parameters: Array.isArray(m.parameters) ? m.parameters : [],
-    // A provider tags each entry "method" or "event" (ModuleProxy's
-    // getPluginInterface() does, and its getPluginMethods()/getPluginEvents()
-    // are just filters of it). MethodMetadata has no such field, so it rides in
-    // the same JSON object the C++ side leaves room for -- dropping it here
-    // would make a JS provider's interface unreadable to a consumer that asks
-    // "which of these are events?".
-    ...(m.type === undefined ? {} : { type: m.type }),
-  };
-}
-
-function methodFromJson(j) {
-  const o = j && typeof j === 'object' ? j : {};
+// One MethodsResult entry, in the shape it has on the wire. The same
+// normalisation is applied on the way out and on the way in, so a JS provider
+// and a JS consumer agree with the C++ codec and with each other.
+function normalizeMethod(m) {
+  const o = m && typeof m === 'object' ? m : {};
   return {
     name: str(o.name),
     signature: str(o.signature),
     returnType: str(o.returnType),
     isInvokable: o.isInvokable === undefined ? true : !!o.isInvokable,
     parameters: Array.isArray(o.parameters) ? o.parameters : [],
-    // A provider tags each entry "method" or "event"; ModuleProxy's own
-    // getPluginInterface() carries it and getMethods() consumers read it.
+    // A provider tags each entry "method" or "event" (ModuleProxy's
+    // getPluginInterface() does, and its getPluginMethods()/getPluginEvents()
+    // are just filters of it). MethodMetadata has no such field, so it rides in
+    // the same JSON object the C++ side leaves room for -- dropping it here
+    // would make a JS provider's interface unreadable to a consumer that asks
+    // "which of these are events?".
     ...(o.type === undefined ? {} : { type: o.type }),
   };
 }
@@ -237,7 +239,7 @@ function messageFromPayload(type, p) {
     case MessageType.MethodsResult: {
       const ok = p.ok === true;
       return ok
-        ? { type, id: num(p.id), ok, methods: (Array.isArray(p.methods) ? p.methods : []).map(methodFromJson) }
+        ? { type, id: num(p.id), ok, methods: (Array.isArray(p.methods) ? p.methods : []).map(normalizeMethod) }
         : { type, id: num(p.id), ok, err: str(p.err) };
     }
     default:
@@ -269,9 +271,8 @@ function decodeMessage(text) {
     throw new CodecError('web message is not a {type, payload} envelope');
   if (!Number.isInteger(envelope.type))
     throw new CodecError('web message type tag is not an integer');
-  if (envelope.type < MessageType.Call || envelope.type > MessageType.MethodsResult)
-    throw new CodecError('web message carries an unknown type tag');
 
+  // An unknown tag is rejected by messageFromPayload.
   return messageFromPayload(envelope.type, envelope.payload);
 }
 
@@ -280,5 +281,4 @@ module.exports = {
   FramingError, CodecError,
   encodeMessage, decodeMessage,
   bytes, fromBytes, isTaggedBytes, b64UrlEncode, b64UrlDecodeChecked,
-  utf8Length,
 };

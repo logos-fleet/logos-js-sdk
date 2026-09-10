@@ -34,7 +34,6 @@ class WebProvider {
     this.name = moduleName;
     this._onError = opts.onError || (() => {});
     this._handlers = {};
-    this._events = [];
     this._iface = [];
     this._onToken = null;
     this._tokens = new Set();
@@ -57,18 +56,20 @@ class WebProvider {
   register(spec = {}) {
     if (this._registered) throw new Error('WebProvider already registered');
     this._handlers = spec.handlers || {};
-    this._events = spec.events || [];
     this._onToken = spec.onToken || null;
     this._iface = spec.methods || [
-      ...Object.keys(this._handlers).map((name) => ({
-        name,
-        type: 'method',
-        signature: `${name}(${paramNames(this._handlers[name]).join(', ')})`,
-        returnType: 'any',
-        isInvokable: true,
-        parameters: paramNames(this._handlers[name]).map((p) => ({ name: p, type: 'any' })),
-      })),
-      ...this._events.map((name) => ({
+      ...Object.entries(this._handlers).map(([name, fn]) => {
+        const params = paramNames(fn);
+        return {
+          name,
+          type: 'method',
+          signature: `${name}(${params.join(', ')})`,
+          returnType: 'any',
+          isInvokable: true,
+          parameters: params.map((p) => ({ name: p, type: 'any' })),
+        };
+      }),
+      ...(spec.events || []).map((name) => ({
         name, type: 'event', signature: `${name}(...)`, returnType: 'void',
         isInvokable: false, parameters: [],
       })),
@@ -85,6 +86,10 @@ class WebProvider {
    * makes a page that serves a module to its own worker usable without a
    * capability round trip. Save one token and the door shuts: from then on a
    * call must carry a token this provider was given.
+   *
+   * `fromModule` is accepted for symmetry with the Node provider's saveToken
+   * and not consulted: tokens are not scoped per caller here, because on this
+   * transport the caller is the channel, not a name inside the message.
    */
   saveToken(fromModule, token) {
     this._tokens.add(String(token));
@@ -159,20 +164,20 @@ class WebProvider {
       reply({ ok: false, err: `unknown method ${this.name}.${msg.method}`, errCode: 'METHOD_FAILED' });
       return;
     }
+    const failed = (e) =>
+      reply({ ok: false, err: `${this.name}.${msg.method}: ${e && e.message}`, errCode: 'METHOD_FAILED' });
+    const succeeded = (v) => reply({ ok: true, value: v === undefined ? null : v });
     let out;
     try {
       out = fn(...(msg.args || []));
     } catch (e) {
-      reply({ ok: false, err: `${this.name}.${msg.method}: ${e && e.message}`, errCode: 'METHOD_FAILED' });
+      failed(e);
       return;
     }
-    if (out && typeof out.then === 'function') {
-      out.then(
-        (v) => reply({ ok: true, value: v === undefined ? null : v }),
-        (e) => reply({ ok: false, err: `${this.name}.${msg.method}: ${e && e.message}`, errCode: 'METHOD_FAILED' }));
-      return;
-    }
-    reply({ ok: true, value: out === undefined ? null : out });
+    // A Promise is answered when it settles; a plain value right now, on this
+    // stack, which is what keeps a synchronous handler's reply synchronous.
+    if (out && typeof out.then === 'function') out.then(succeeded, failed);
+    else succeeded(out);
   }
 
   _onMethods(msg, reply) {

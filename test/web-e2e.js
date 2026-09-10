@@ -14,18 +14,7 @@ const { MessageChannel, Worker } = require('node:worker_threads');
 const path = require('node:path');
 const { WebClient, WebProvider, messagePortChannel, wire } = require('../src/web/index.js');
 const { nodePortChannel } = require('../src/web/node-channel.js');
-
-function assert(cond, msg) { if (!cond) throw new Error('ASSERT FAILED: ' + msg); }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function waitFor(pred, budgetMs, what) {
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    if (pred()) return true;
-    await sleep(5);
-  }
-  throw new Error(`timed out after ${budgetMs}ms waiting for ${what}`);
-}
+const { assert, sleep, waitFor } = require('./helpers.js');
 
 // -- (1)-(5), (7), (8): both ends in this thread, over a real MessageChannel --
 async function sameThreadCases() {
