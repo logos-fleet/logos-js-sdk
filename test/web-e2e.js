@@ -35,6 +35,14 @@ async function sameThreadCases() {
   });
   provider.saveToken('web_e2e_app', 'web-e2e-tok');
 
+  // A SECOND consumer, on a channel of its own and holding no token. Case (9)
+  // uses it; a provider serves as many channels as it is attached to, and the
+  // caller IS the channel, so this is the honest way to ask what an
+  // unauthorized consumer can get.
+  const anonPair = new MessageChannel();
+  const providerAnonChannel = messagePortChannel(anonPair.port1);
+  const anonChannel = messagePortChannel(anonPair.port2);
+
   const logos = new WebClient('web_e2e_app', { channel: messagePortChannel(port2), timeoutMs: 5000 });
   const calc = logos.module('calc_js');
   calc.saveToken('web-e2e-tok');
@@ -106,6 +114,28 @@ async function sameThreadCases() {
     assert(refused && refused.code === 'UNAUTHORIZED', `wrong token refused, got ${refused && refused.code}`);
     calc.saveToken('web-e2e-tok');
     console.log('OK  wrong token refused:', refused.message);
+
+    // (9) INTROSPECTION IS ANSWERED WITHOUT A TOKEN, while a call is not.
+    // LogosObject::getMethods() takes no auth token on any transport, so a
+    // conforming consumer -- every C++ one -- cannot present one here. A
+    // provider that gated this message would be unintrospectable by the host
+    // that loaded it, which is how the Web container's load verdict (a Methods
+    // round trip) started failing the moment the module's credential arrived.
+    const anon = new WebClient('web_e2e_anon', { channel: anonChannel });
+    provider.attach(providerAnonChannel);
+    const anonCalc = anon.module('calc_js');
+    try {
+      const anonIface = await anonCalc.getMethods();
+      assert(anonIface.map((m) => m.name).includes('add'),
+        `an untokened Methods query is answered, got ${JSON.stringify(anonIface)}`);
+      let anonRefused = null;
+      try { await anonCalc.call('add', 1, 1); } catch (e) { anonRefused = e; }
+      assert(anonRefused && anonRefused.code === 'UNAUTHORIZED',
+        `an untokened CALL is still refused, got ${anonRefused && anonRefused.code}`);
+      console.log('OK  untokened introspection answered, untokened call refused');
+    } finally {
+      anon.destroy();
+    }
   } finally {
     logos.destroy();
     provider.destroy();

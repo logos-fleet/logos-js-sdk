@@ -180,13 +180,21 @@ class WebProvider {
     else succeeded(out);
   }
 
+  // INTROSPECTION IS NOT TOKEN-GATED, and that is the protocol's decision, not
+  // a relaxation of it. `LogosObject::getMethods()` -- the only consumer-side
+  // entry point there is, on every transport -- takes no auth token, so a
+  // conforming consumer has nothing to present here; the reference provider
+  // (logos-protocol's WebTransportHost::onMethods) accordingly answers without
+  // asking. A gate on this one message would therefore not refuse an attacker,
+  // it would refuse EVERY C++ consumer: the Web container's own load verdict is
+  // a Methods round trip, so a page that gated it reported itself as "never
+  // published a module" the moment its credential arrived and shut the door.
+  //
+  // What the token still gates is every CALL (_onCall), which is where the
+  // authority actually is.
   _onMethods(msg, reply) {
     if (msg.object !== this.name) {
       reply({ ok: false, err: 'object not published' });
-      return;
-    }
-    if (!this._authorized(msg.authToken)) {
-      reply({ ok: false, err: `unauthorized methods query for ${this.name}` });
       return;
     }
     reply({ ok: true, methods: this._iface });
