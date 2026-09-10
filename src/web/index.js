@@ -22,6 +22,14 @@
 //   p.register({ handlers: { add: (a, b) => a + b }, events: ['ticked'] });
 //   p.emit('ticked', 1);
 //
+//   // BE ONE: a page inside the Web container serves its module and calls back
+//   // out on the SAME channel, so the client borrows the provider's peer. Two
+//   // peers over one channel would fight over its single receiver.
+//   const peer  = provider.attach(await window.logosChannelReady);
+//   const logos = new WebClient('my_module', { peer });
+//   const token = await logos.module('capability_module')
+//                           .call('requestModule', 'my_module', 'other_module');
+//
 // The wire is logos-protocol's WEB transport (cpp/implementations/web): the
 // plain transport's message set as JSON over a channel, with no byte framing.
 // The shapes live in wire.js, which the Node half of this SDK re-exports too -

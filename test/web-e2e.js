@@ -10,6 +10,10 @@
 //   (2) async call, object result        (6) sync call (from a worker thread)
 //   (3) {_bytes} round trip              (7) the frame cap
 //   (4) introspection                    (8) an unauthorised call is refused
+//
+// Plus one the koffi SDK has no equivalent of, because it is what a page inside
+// the Web container is: (10) a provider and a consumer sharing ONE peer, so a
+// module that is a page can call back out on the channel it is served over.
 const { MessageChannel, Worker } = require('node:worker_threads');
 const path = require('node:path');
 const { WebClient, WebProvider, messagePortChannel, wire } = require('../src/web/index.js');
@@ -34,6 +38,14 @@ async function sameThreadCases() {
     events: ['ticked'],
   });
   provider.saveToken('web_e2e_app', 'web-e2e-tok');
+
+  // A SECOND consumer, on a channel of its own and holding no token. Case (9)
+  // uses it; a provider serves as many channels as it is attached to, and the
+  // caller IS the channel, so this is the honest way to ask what an
+  // unauthorized consumer can get.
+  const anonPair = new MessageChannel();
+  const providerAnonChannel = messagePortChannel(anonPair.port1);
+  const anonChannel = messagePortChannel(anonPair.port2);
 
   const logos = new WebClient('web_e2e_app', { channel: messagePortChannel(port2), timeoutMs: 5000 });
   const calc = logos.module('calc_js');
@@ -106,6 +118,28 @@ async function sameThreadCases() {
     assert(refused && refused.code === 'UNAUTHORIZED', `wrong token refused, got ${refused && refused.code}`);
     calc.saveToken('web-e2e-tok');
     console.log('OK  wrong token refused:', refused.message);
+
+    // (9) INTROSPECTION IS ANSWERED WITHOUT A TOKEN, while a call is not.
+    // LogosObject::getMethods() takes no auth token on any transport, so a
+    // conforming consumer -- every C++ one -- cannot present one here. A
+    // provider that gated this message would be unintrospectable by the host
+    // that loaded it, which is how the Web container's load verdict (a Methods
+    // round trip) started failing the moment the module's credential arrived.
+    const anon = new WebClient('web_e2e_anon', { channel: anonChannel });
+    provider.attach(providerAnonChannel);
+    const anonCalc = anon.module('calc_js');
+    try {
+      const anonIface = await anonCalc.getMethods();
+      assert(anonIface.map((m) => m.name).includes('add'),
+        `an untokened Methods query is answered, got ${JSON.stringify(anonIface)}`);
+      let anonRefused = null;
+      try { await anonCalc.call('add', 1, 1); } catch (e) { anonRefused = e; }
+      assert(anonRefused && anonRefused.code === 'UNAUTHORIZED',
+        `an untokened CALL is still refused, got ${anonRefused && anonRefused.code}`);
+      console.log('OK  untokened introspection answered, untokened call refused');
+    } finally {
+      anon.destroy();
+    }
   } finally {
     logos.destroy();
     provider.destroy();
@@ -158,10 +192,90 @@ async function syncCase() {
   }
 }
 
+// -- (10) ONE CHANNEL, BOTH ROLES: a page that is a MODULE ------------------
+//
+// A page inside the Web container is served over ONE channel, the one its host
+// handed it, and everything it does goes down that channel: the host's calls
+// arrive on it, and the page's own calls -- capability_module for a token, then
+// the module it was granted -- have to leave on it. A second WebPeer over that
+// channel would install the channel's single receiver and silently take every
+// message from the first, so the provider and the client share one peer.
+//
+// Both ends here do exactly that, which is also what the C++ side does: one
+// WebTransportConnection carrying WebModuleGlue's calls into the page and
+// WebCallRouter's out of it.
+async function moduleBothDirectionsCase() {
+  const { port1, port2 } = new MessageChannel();
+
+  // ── the page ────────────────────────────────────────────────────────────
+  const page = new WebProvider('js_counter', { onError: (e) => { throw e; } });
+  let counted = 0;
+  page.register({
+    handlers: { add: (a, b) => a + b, count: () => ++counted },
+    events: ['counted'],
+  });
+  const pagePeer = page.attach(messagePortChannel(port1));
+  const fromPage = new WebClient('js_counter', { peer: pagePeer, timeoutMs: 5000 });
+
+  // ── the host ────────────────────────────────────────────────────────────
+  const host = new WebProvider('capability_module', { onError: (e) => { throw e; } });
+  host.register({
+    handlers: { requestModule: (name) => `token-for-${name}` },
+    events: ['granted'],
+  });
+  const hostPeer = host.attach(messagePortChannel(port2));
+  const fromHost = new WebClient('logos_core', { peer: hostPeer, timeoutMs: 5000 });
+
+  try {
+    // host -> page, the direction that already worked
+    const sum = await fromHost.module('js_counter').call('add', 1, 2);
+    assert(sum === 3, `host -> page add(1,2) === 3, got ${JSON.stringify(sum)}`);
+    console.log('OK  host -> page  add(1,2) =', sum);
+
+    // page -> host, on the SAME channel and while the page is still serving
+    const token = await fromPage.module('capability_module').call('requestModule', 'math_module');
+    assert(token === 'token-for-math_module',
+      `page -> host requestModule, got ${JSON.stringify(token)}`);
+    console.log('OK  page -> host  requestModule =', token);
+
+    // ... and the host can still call in afterwards: the page's outbound call
+    // did not consume the conversation, it shared it.
+    const nth = await fromHost.module('js_counter').call('count');
+    assert(nth === 1, `host -> page count() === 1, got ${JSON.stringify(nth)}`);
+
+    // a native module's event reaching the page
+    const seen = [];
+    const off = fromPage.module('capability_module').on('granted', (n) => seen.push(n));
+    await waitFor(() => host.subscriberCount('granted') === 1, 2000, 'the page Subscribe to arrive');
+    host.emit('granted', 'math_module');
+    await waitFor(() => seen.length === 1, 2000, 'the host event to arrive');
+    assert(seen[0] === 'math_module', `host event payload, got ${JSON.stringify(seen)}`);
+    off();
+    console.log('OK  host event -> page  granted =', seen[0]);
+
+    // and the page's own event still reaching the host, unchanged
+    const hostSaw = [];
+    fromHost.module('js_counter').on('counted', (n) => hostSaw.push(n));
+    await waitFor(() => page.subscriberCount('counted') === 1, 2000, 'the host Subscribe to arrive');
+    page.emit('counted', 9);
+    await waitFor(() => hostSaw.length === 1, 2000, 'the page event to arrive');
+    assert(hostSaw[0] === 9, `page event payload, got ${JSON.stringify(hostSaw)}`);
+    console.log('OK  page event -> host  counted =', hostSaw[0]);
+  } finally {
+    // The clients BORROW their peers, so destroying them must not take the
+    // providers' conversations down: the providers are what own them.
+    fromPage.destroy();
+    fromHost.destroy();
+    page.destroy();
+    host.destroy();
+  }
+}
+
 async function main() {
   console.log('=== logos-js-sdk browser build: JS provider <-> JS consumer over a MessageChannel ===\n');
   await sameThreadCases();
   await syncCase();
+  await moduleBothDirectionsCase();
   console.log('\n=== WEB E2E PASSED ===');
 }
 

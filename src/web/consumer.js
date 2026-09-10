@@ -115,18 +115,37 @@ class WebClient {
    *   STRUCTURAL, it is the channel the message arrived on (ADR 0005) - so this
    *   is what we call ourselves in Token messages and in diagnostics.
    * @param {Object} opts
-   * @param {Object} opts.channel      the message channel (channel.js)
+   * @param {Object} [opts.channel]    the message channel (channel.js)
+   * @param {Object} [opts.peer]       an EXISTING WebPeer to call over, instead
+   *   of a channel of our own - see below. Exactly one of channel/peer.
    * @param {number} [opts.timeoutMs]  default call timeout (30s)
-   * @param {Function} [opts.onError]  malformed inbound message / handler throw
-   * @param {Function} [opts.onClosed] the channel went away
+   * @param {Function} [opts.onError]  malformed inbound message / handler throw.
+   *   Only for a peer of our own: a BORROWED peer already has its owner's.
+   * @param {Function} [opts.onClosed] the channel went away. Same caveat.
    */
   constructor(originModule, opts = {}) {
     if (!originModule) throw new Error('WebClient: originModule is required');
-    if (!opts.channel) throw new Error('WebClient: opts.channel is required');
+    if (!opts.channel && !opts.peer)
+      throw new Error('WebClient: opts.channel or opts.peer is required');
     this.origin = originModule;
     this.timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
     this._proxies = new Map();
-    this.peer = new WebPeer(opts.channel, {
+    // CALLING OVER SOMEBODY ELSE'S PEER IS THE MODULE CASE, not a shortcut.
+    //
+    // A page that IS a Logos module is served over one channel, the one its
+    // host handed it, and calling back out - capability_module for a token,
+    // then the module it was granted - has to go down that same channel. A
+    // second WebPeer over it would install the channel's single receiver and
+    // silently take every message from the provider's. So a module page passes
+    // the peer its provider is already running on:
+    //
+    //   const peer  = provider.attach(channel);
+    //   const logos = new WebClient('my_module', { peer });
+    //
+    // The peer is BORROWED in that case: destroy() leaves it alone, because
+    // whoever created it is still serving on it.
+    this._ownsPeer = !opts.peer;
+    this.peer = opts.peer || new WebPeer(opts.channel, {
       onError: opts.onError || (() => {}),
       onClosed: opts.onClosed || (() => {}),
     }).start();
@@ -145,8 +164,15 @@ class WebClient {
   /** Present `token` on every call to `moduleName`. */
   saveToken(moduleName, token) { this.module(moduleName).saveToken(token); return true; }
 
-  /** Stop the conversation and close the channel. */
-  destroy() { this.peer.stop('client destroyed'); this._proxies.clear(); }
+  /**
+   * Stop the conversation and close the channel - unless the peer was handed
+   * in, in which case its owner is still serving on it and only this client's
+   * proxies go away.
+   */
+  destroy() {
+    if (this._ownsPeer) this.peer.stop('client destroyed');
+    this._proxies.clear();
+  }
 }
 
 module.exports = { WebClient, WebModuleProxy };
