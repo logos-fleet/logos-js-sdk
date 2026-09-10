@@ -85,6 +85,57 @@ function generateClient(mod, { sdkImport = 'logos-js-sdk' } = {}) {
   return out;
 }
 
+// -- browser client (ES module) ---------------------------------------------
+//
+// The SAME shape as generateClient's, emitted as an ES MODULE against the
+// browser build's proxy (src/web/consumer.js) instead of the koffi one. Two
+// differences, both forced by the transport and both visible in the output:
+// getMethods() is a Promise there, and the module is `export class` rather than
+// `module.exports`, because a browser build is loaded by an import and a
+// generated file that needed a bundler to be usable would defeat the point.
+//
+// No runtime import is emitted. The client only ever touches the proxy it is
+// handed, so an import of the SDK would be a hard dependency on WHERE the SDK
+// was bundled - the specifier survives in the JSDoc types, which is where an
+// editor wants it and a loader does not.
+function generateWebClient(mod, { sdkImport = 'logos-js-sdk/web' } = {}) {
+  const Cls = pascal(mod.name) + 'Client';
+  let out = header(mod, 'Typed browser client');
+  out += `class ${Cls} {\n`;
+  out += `  /** @param {import('${sdkImport}').WebModuleProxy} proxy */\n`;
+  out += `  constructor(proxy) { this._proxy = proxy; }\n\n`;
+  out += `  /** Bind against a WebClient. @param {import('${sdkImport}').WebClient} logos */\n`;
+  out += `  static bind(logos, moduleName = ${JSON.stringify(mod.name)}) {\n`;
+  out += `    return new ${Cls}(logos.module(moduleName));\n  }\n`;
+
+  for (const m of mod.methods || []) {
+    const args = paramNames(m);
+    const paramDoc = (m.params || []).map((p) => `   * @param {${jsdocType(p.type)}} ${p.name}`).join('\n');
+    out += `\n  /**\n   * ${sig(m)} -> ${m.returnType ? lidlType(m.returnType) : 'void'}` +
+           `${m.description ? `\n   * ${m.description}` : ''}\n` +
+           `${paramDoc ? paramDoc + '\n' : ''}` +
+           `   * @returns {Promise<${jsdocType(m.returnType)}>}\n   */\n`;
+    out += `  ${m.name}(${args.join(', ')}) {\n`;
+    out += `    return this._proxy.call(${[JSON.stringify(m.name), ...args].join(', ')});\n  }\n`;
+  }
+
+  for (const e of mod.events || []) {
+    const paramDoc = (e.params || []).map((p) => `   * @param {${jsdocType(p.type)}} ${p.name}`).join('\n');
+    out += `\n  /**\n   * Subscribe to event ${sig(e)}.` +
+           `${e.description ? `\n   * ${e.description}` : ''}\n${paramDoc ? paramDoc + '\n' : ''}` +
+           `   * @param {Function} handler  called with the event payload as positional args\n` +
+           `   * @returns {Function} unsubscribe\n   */\n`;
+    out += `  on${pascal(e.name)}(handler) {\n`;
+    out += `    return this._proxy.on(${JSON.stringify(e.name)}, handler);\n  }\n`;
+  }
+
+  out += `\n  /** The module's interface as the provider reports it.\n`;
+  out += `   * @returns {Promise<Array<{name: string, type: string}>>} */\n`;
+  out += `  getMethods() { return this._proxy.getMethods(); }\n`;
+  out += `}\n\nexport { ${Cls} };\nexport default ${Cls};\n`;
+  return out;
+}
+
 // ── provider scaffold ───────────────────────────────────────────────────────
 function generateProvider(mod, { sdkImport = 'logos-js-sdk' } = {}) {
   let out = header(mod, 'Provider scaffold');
@@ -123,4 +174,4 @@ function generateProvider(mod, { sdkImport = 'logos-js-sdk' } = {}) {
   return out;
 }
 
-module.exports = { generateClient, generateProvider, jsdocType, pascal };
+module.exports = { generateClient, generateWebClient, generateProvider, jsdocType, pascal };

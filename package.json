@@ -1,18 +1,22 @@
 {
   "name": "logos-js-sdk",
   "version": "2.0.0",
-  "description": "Protocol-native, Qt-free JavaScript SDK for Logos (lp_* consumer + provider over koffi)",
+  "description": "JavaScript SDK for Logos: a protocol-native Node build (lp_* over koffi) and a browser build (the web transport over a message channel)",
   "main": "index.js",
   "bin": {
     "logos-lidl-gen-js": "codegen/cli.js"
   },
   "scripts": {
-    "test": "node test/e2e.js"
+    "test": "node test/e2e.js",
+    "test:web": "node test/web-e2e.js",
+    "build:web": "esbuild src/web/index.mjs --bundle --platform=browser --target=es2020 --format=esm --outfile=dist/logos-web.mjs && esbuild src/web/index.js --bundle --platform=browser --target=es2020 --format=iife --global-name=LogosWeb --outfile=dist/logos-web.js",
+    "gen": "node codegen/cli.js"
   },
   "files": [
     "index.js",
     "src/",
     "codegen/",
+    "dist/",
     "README.md",
     "lib/",
     "flake.nix",
@@ -26,11 +30,26 @@
     "lp",
     "protocol",
     "module",
-    "lidl"
+    "lidl",
+    "browser",
+    "webview",
+    "messageport"
   ],
   "author": "Logos Team",
   "license": "MIT",
   "dependencies": {
     "koffi": "^2.9.0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./web": {
+      "browser": "./dist/logos-web.mjs",
+      "import": "./src/web/index.mjs",
+      "require": "./src/web/index.js",
+      "default": "./src/web/index.js"
+    },
+    "./web/wire": "./src/web/wire.js",
+    "./codegen/*": "./codegen/*",
+    "./package.json": "./package.json"
   }
 }

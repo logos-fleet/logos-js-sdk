@@ -21,6 +21,14 @@
 const ffi = require('./src/ffi.js');
 const { LogosClient, ModuleProxy } = require('./src/client.js');
 const { Provider } = require('./src/provider.js');
+// The message shapes, re-exported from the browser build (src/web/wire.js).
+// Nothing in this half encodes a message itself -- the C library does -- but a
+// Node process that RELAYS them does: the Web container's native bridge moves
+// frames between a webview's channel and the core without interpreting them,
+// and a `{_bytes}` value has to be validated at that edge. It reads the shapes
+// from the same file the browser build is written against, so there is one
+// definition of the wire in this package and not two.
+const wire = require('./src/web/wire.js');
 
 // ── transport config helpers ────────────────────────────────────────────────
 /** Plain TCP transport. */
@@ -57,4 +65,7 @@ module.exports = {
   LogosClient, ModuleProxy, Provider,
   tcp, tcpSsl, unixSocket,
   protocolVersion, protocolAbiMajor, setMode,
+  // The browser build lives behind the `logos-js-sdk/web` subpath export; only
+  // the shapes it shares with this half are re-exported here.
+  wire,
 };
