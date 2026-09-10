@@ -80,6 +80,40 @@ p.saveToken('my_web_module', authToken);          // authorise a caller
 p.emit('ticked', 1);
 ```
 
+### Being a module: one channel, both roles
+
+A page running inside the Logos **Web container** is handed exactly one channel,
+and everything crosses it — the host's calls in, and the page's own calls out.
+So the client **borrows the provider's peer** instead of opening a second one:
+two `WebPeer`s over one channel fight over its single receiver, and the second
+silently takes every message from the first.
+
+```js
+const channel = await window.logosChannelReady;   // the host's contract
+
+const provider = new WebProvider('my_module');
+provider.register({
+  handlers: { add: (a, b) => a + b },
+  events: ['counted'],
+  onToken: (moduleName, token) => provider.saveToken(moduleName, token),
+});
+const peer  = provider.attach(channel);           // attach() hands back the peer
+const logos = new WebClient('my_module', { peer });
+
+// ask capability_module for access, then call what it granted
+const token = await logos.module('capability_module')
+                        .call('requestModule', 'other_module');
+const other = logos.module('other_module');
+other.saveToken(token);
+await other.call('doSomething');
+
+// and watch what a native module emits
+other.on('changed', (value) => { … });
+```
+
+`destroy()` on a client that borrowed a peer clears only its own proxies: the
+provider still owns the conversation.
+
 ### The channel
 
 The channel is the browser build's *whole* dependency on its environment, and it
