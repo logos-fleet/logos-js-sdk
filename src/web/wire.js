@@ -169,7 +169,20 @@ function payloadOf(msg) {
   switch (msg.type) {
     case MessageType.Call:
       return { id: msg.id, authToken: msg.authToken || '', object: msg.object,
-               method: msg.method, args: msg.args || [] };
+               method: msg.method, args: msg.args || [],
+               // WHO THE SENDER SAYS IS CALLING -- the logos-protocol caller
+               // document, as a string. OMITTED when empty, which is what the
+               // C++ codec does and is the whole of the compatibility story: a
+               // peer that never sets one emits the frame it always emitted.
+               //
+               // It exists because a RELAY is not identifiable by its token.
+               // The Web container presents the relayed module's OWN root
+               // credential on every call it forwards, so a page deriving the
+               // caller from that token names ITSELF for every caller in the
+               // fleet (logos-workspace#129). Carried here so a JS module is
+               // told the same thing a Wasm one is; what to DO with it is the
+               // handler's business, and no accessor is offered yet.
+               ...(msg.caller ? { caller: msg.caller } : {}) };
     case MessageType.Result:
       return msg.ok
         ? { id: msg.id, ok: true, value: msg.value === undefined ? null : msg.value }
@@ -220,7 +233,7 @@ function messageFromPayload(type, p) {
   switch (type) {
     case MessageType.Call:
       return { type, id: num(p.id), authToken: str(p.authToken), object: str(p.object),
-               method: str(p.method), args: list(p.args) };
+               method: str(p.method), args: list(p.args), caller: str(p.caller) };
     case MessageType.Result: {
       const ok = p.ok === true;
       return ok

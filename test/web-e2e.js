@@ -119,6 +119,34 @@ async function sameThreadCases() {
     calc.saveToken('web-e2e-tok');
     console.log('OK  wrong token refused:', refused.message);
 
+    // (8b) THE CALLER DOCUMENT SURVIVES THIS CODEC, and is absent when nobody
+    // set one. Asserted at the codec rather than through a call because this
+    // SDK offers no caller accessor yet -- what it owes today is not to LOSE
+    // the field, since a JS page may sit between a container and a module and
+    // wire.js is documented as mirroring json_mapping.cpp field for field. The
+    // field exists because a relay is not identifiable by its token: the Web
+    // container presents the relayed module's own root credential on every call
+    // it forwards (logos-workspace#129).
+    {
+      const named = wire.decodeMessage(wire.encodeMessage({
+        type: wire.MessageType.Call, id: 1, authToken: 't', object: 'keystore_module',
+        method: 'create_unrelated_account', args: [],
+        caller: JSON.stringify({ kind: 'module', name: 'wallet_ui' }),
+      }));
+      assert(named.caller === '{"kind":"module","name":"wallet_ui"}',
+        `the caller document survived the wire, got ${JSON.stringify(named.caller)}`);
+
+      const plain = wire.encodeMessage({
+        type: wire.MessageType.Call, id: 2, authToken: 't', object: 'calc_js',
+        method: 'add', args: [1, 2],
+      });
+      assert(!plain.includes('caller'),
+        `a call with no caller carries no such key, got ${plain}`);
+      assert(wire.decodeMessage(plain).caller === '',
+        'a call with no caller decodes to the empty document');
+      console.log('OK  the caller document round-trips, and is omitted when empty');
+    }
+
     // (9) INTROSPECTION IS ANSWERED WITHOUT A TOKEN, while a call is not.
     // LogosObject::getMethods() takes no auth token on any transport, so a
     // conforming consumer -- every C++ one -- cannot present one here. A
